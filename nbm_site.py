@@ -323,12 +323,41 @@ def build_payload(d, lat0, lon0, radius, spacing, elev):
                 break
 
     osm_layers, _ = process_osm.build(lat0, lon0, radius, osmdir=os.path.join(d, "osm"))
-    terrain = base64.b64encode(open(os.path.join(d, "terrain.webp"), "rb").read()).decode()
 
     return {"vintage": blob.get("vintage", "unknown"), "verslug": blob.get("verslug", "dec2025"),
             "uuid": blob.get("process_uuid"), "center": [lat0, lon0], "radius": radius,
             "spacing": spacing, "elev": elev, "carriers": carriers, "pts": pts,
-            "counties": counties, "places": places, "osm": osm_layers, "terrain": terrain}
+            "counties": counties, "places": places, "osm": osm_layers}
+
+
+def write_pack(slug, name, payload, cache_dir):
+    """Publish a survey as surveys/<slug>/{data.json,terrain.webp} + refresh surveys.json."""
+    pack = os.path.join(HERE, "surveys", slug)
+    os.makedirs(pack, exist_ok=True)
+    json.dump(payload, open(os.path.join(pack, "data.json"), "w", encoding="utf-8"),
+              separators=(",", ":"))
+    shutil.copy(os.path.join(cache_dir, "terrain.webp"), os.path.join(pack, "terrain.webp"))
+
+    man_path = os.path.join(HERE, "surveys.json")
+    man = {"surveys": []}
+    if os.path.exists(man_path):
+        try:
+            man = json.load(open(man_path, encoding="utf-8"))
+        except Exception:
+            pass
+    entry = {"slug": slug, "name": name, "center": payload["center"],
+             "radius": payload["radius"], "spacing": payload["spacing"],
+             "vintage": payload["vintage"], "verslug": payload["verslug"],
+             "elev": payload["elev"], "points": len(payload["pts"]),
+             "carriers": payload["carriers"]}
+    man["surveys"] = [s for s in man.get("surveys", []) if s.get("slug") != slug] + [entry]
+    man["surveys"].sort(key=lambda s: s["name"])
+    man.setdefault("default", man["surveys"][0]["slug"])
+    json.dump(man, open(man_path, "w", encoding="utf-8"), indent=1)
+    size = os.path.getsize(os.path.join(pack, "data.json"))
+    print(f"  pack surveys/{slug}/  data.json {size:,} b + terrain.webp")
+    print(f"  manifest now lists {len(man['surveys'])} survey(s)")
+    return pack
 
 
 def main():
@@ -339,7 +368,7 @@ def main():
     ap.add_argument("--name")
     ap.add_argument("--slug")
     ap.add_argument("--force", default="", help="comma list: census,terrain,osm,coverage")
-    ap.add_argument("--out")
+    ap.add_argument("--out", help="unused; packs go to surveys/<slug>/")
     a = ap.parse_args()
 
     try:
@@ -351,7 +380,11 @@ def main():
     county, elev = None, None
     try:
         _, txt = curl(f"https://geo.fcc.gov/api/census/area?lat={lat0}&lon={lon0}&format=json")
-        county = json.loads(txt[:-3])["results"][0]["county_name"]
+        res = json.loads(txt[:-3])["results"][0]
+        county = res["county_name"]
+        st = res.get("state_code") or res.get("state_name")
+        if st:
+            county = f"{county}, {st}"
     except Exception:
         pass
     try:
@@ -359,7 +392,7 @@ def main():
         elev = float(json.loads(txt[:-3])["value"])
     except Exception:
         pass
-    title = a.name or ((county + " Signal Map") if county else "Mobile Signal Map")
+    title = a.name or (county if county else "Survey")
     slug = a.slug or "".join(ch if ch.isalnum() else "_" for ch in title.lower()).strip("_")
     d = os.path.join(HERE, "sites", slug)
     os.makedirs(d, exist_ok=True)
@@ -377,19 +410,11 @@ def main():
 
     print(" [assemble]")
     payload = build_payload(d, lat0, lon0, a.radius, a.spacing, elev)
-    tpl = open(os.path.join(HERE, "template.html"), encoding="utf-8").read()
-    html = (tpl.replace("__TITLE__", title)
-               .replace("__RADIUS__", f"{a.radius:g}")
-               .replace("__SPACING__", f"{a.spacing:g}")
-               .replace("__CENTER__", fmt_coord(lat0, lon0, 5).replace("°", "&deg;"))
-               .replace("__R__", f"{a.radius:g}")
-               .replace("/*__PAYLOAD__*/", json.dumps(payload, separators=(",", ":"))))
-    out = a.out or os.path.join(HERE, f"{slug}.html")
-    open(out, "w", encoding="utf-8").write(html)
     n_osm = sum(len(v) for v in payload["osm"].values())
     print(f"  {len(payload['pts'])} coverage points, {n_osm} osm lines, "
           f"{len(payload['places'])} places, {len(payload['counties'])} counties")
-    print(f"built {out}  {os.path.getsize(out):,} bytes")
+    write_pack(slug, title, payload, d)
+    subprocess.run([sys.executable, os.path.join(HERE, "build_app.py")], check=False)
 
 
 if __name__ == "__main__":

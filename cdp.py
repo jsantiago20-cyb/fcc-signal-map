@@ -4,7 +4,7 @@ Chrome is the only HTTP client that gets past the FCC's Akamai Bot Manager, so w
 drive a real Chrome and run our fetches *inside* a broadbandmap.fcc.gov page --
 same origin, real cookies, no CORS.
 """
-import base64, json, os, socket, ssl, struct, subprocess, tempfile, time, urllib.request
+import base64, json, os, socket, struct, subprocess, sys, tempfile, time, urllib.request
 
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36")
@@ -107,8 +107,11 @@ class Chrome:
         args = [chrome_path(), f"--remote-debugging-port={port}",
                 f"--user-data-dir={self.profile}", f"--user-agent={UA}",
                 "--no-first-run", "--no-default-browser-check", "--disable-gpu",
-                "--disable-background-timer-throttling", "--window-size=1280,900",
-                "about:blank"]
+                "--disable-background-timer-throttling", "--window-size=1280,900"]
+        if sys.platform.startswith("linux") or os.environ.get("CI"):
+            # CI runners have no usable sandbox and a tiny /dev/shm
+            args += ["--no-sandbox", "--disable-dev-shm-usage"]
+        args.append("about:blank")
         if headless:
             args.insert(1, "--headless=new")
         self.proc = subprocess.Popen(args, stdout=subprocess.DEVNULL,

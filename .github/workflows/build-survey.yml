@@ -1,0 +1,81 @@
+name: Build a survey
+
+# Harvests a coverage survey around a coordinate and commits it as a pack.
+# broadbandmap.fcc.gov refuses browser requests from other origins, so the data
+# has to be collected by a real Chrome — this runner is that Chrome.
+
+on:
+  workflow_dispatch:
+    inputs:
+      at:
+        description: 'Coordinate — "39.7392, -104.9847" or "38.25228N 105.66813W" or DMS'
+        required: true
+        type: string
+      radius:
+        description: "Survey radius in miles"
+        required: false
+        default: "50"
+        type: string
+      spacing:
+        description: "Hex spacing in miles (smaller = finer = many more FCC requests)"
+        required: false
+        default: "2.5"
+        type: string
+      name:
+        description: "Label for the survey (defaults to the county name)"
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-survey
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Pillow
+        run: pip install --quiet pillow
+
+      - name: Show Chrome version
+        run: google-chrome --version
+
+      - name: Harvest and pack the survey
+        run: |
+          python nbm_site.py \
+            --at "${{ inputs.at }}" \
+            --radius "${{ inputs.radius }}" \
+            --spacing "${{ inputs.spacing }}" \
+            ${{ inputs.name && format('--name "{0}"', inputs.name) || '' }}
+
+      - name: Commit the pack
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add surveys surveys.json index.html
+          if git diff --staged --quiet; then
+            echo "No change — that survey was already published."
+            exit 0
+          fi
+          git commit -m "Add survey for ${{ inputs.at }} (${{ inputs.radius }} mi)"
+          git push
+
+      - name: Summary
+        run: |
+          echo "### Survey built" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Coordinate: \`${{ inputs.at }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "Radius: ${{ inputs.radius }} mi · spacing ${{ inputs.spacing }} mi" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "The site redeploys automatically; the new area appears in the survey list." >> $GITHUB_STEP_SUMMARY

@@ -1,0 +1,25 @@
+{
+ "surveys": [
+  {
+   "slug": "custer_county_signal_map",
+   "name": "Custer County, CO",
+   "center": [
+    38.25228,
+    -105.66813
+   ],
+   "radius": 50.0,
+   "spacing": 2.5,
+   "vintage": "December 31, 2025",
+   "verslug": "dec2025",
+   "elev": 8624.47450857504,
+   "points": 1459,
+   "carriers": [
+    "AT&T",
+    "T-Mobile",
+    "Verizon",
+    "Viaero Wireless"
+   ]
+  }
+ ],
+ "default": "custer_county_signal_map"
+}

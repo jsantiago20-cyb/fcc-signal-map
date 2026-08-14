@@ -1,6 +1,7 @@
 __pycache__/
 *.pyc
 sites/*/osm/
+sites/*/terrain.webp
 sites/smoketest/
 previews/
-smoketest.html
+_hillshade.png
