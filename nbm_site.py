@@ -14,7 +14,7 @@ Stages
   osm       roads / trails / rivers             (OpenStreetMap Overpass)
   coverage  the FCC mobile location summaries   (broadbandmap.fcc.gov, via Chrome)
 """
-import argparse, base64, json, math, os, shutil, subprocess, sys, tempfile, time, urllib.parse
+import argparse, base64, json, math, os, re, shutil, subprocess, sys, tempfile, time, urllib.parse
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -135,7 +135,7 @@ def stage_terrain(d, lat0, lon0, radius, px=3600):
             os.remove(raw)
 
 
-def stage_osm(d, lat0, lon0, radius):
+def stage_osm(d, lat0, lon0, radius, force=False):
     od = os.path.join(d, "osm")
     os.makedirs(od, exist_ok=True)
     s, w, n, e = bbox_for(lat0, lon0, radius)
@@ -146,17 +146,38 @@ def stage_osm(d, lat0, lon0, radius):
         "rivers": f'way["waterway"="river"]({bb});',
         "routes": f'relation["route"="hiking"]["name"]({bb});',
     }
+
+    def usable(fp):
+        try:
+            with open(fp, encoding="utf-8") as fh:
+                return isinstance(json.load(fh).get("elements"), list)
+        except Exception:
+            return False
+
     for name, body in jobs.items():
         fp = os.path.join(od, f"{name}.json")
+        if not force and os.path.exists(fp) and usable(fp):
+            print(f"  osm {name} cached")
+            continue
         data = "data=" + urllib.parse.quote(f"[out:json][timeout:300];({body});out geom;")
-        for host in OVERPASS:
-            print(f"  osm {name} @ {host.split('/')[2]} ...", end=" ", flush=True)
-            code, _ = curl(host, fp, post=data, timeout=300)
-            sz = os.path.getsize(fp) if os.path.exists(fp) else 0
-            print(f"{code} {sz:,}b")
-            if code == "200" and sz > 2000:
+        got = False
+        for attempt in range(2):                       # each host twice; Overpass 504s under load
+            for host in OVERPASS:
+                print(f"  osm {name} @ {host.split('/')[2]} ...", end=" ", flush=True)
+                code, _ = curl(host, fp, post=data, timeout=300)
+                sz = os.path.getsize(fp) if os.path.exists(fp) else 0
+                good = code == "200" and usable(fp)
+                print(f"{code} {sz:,}b {'ok' if good else 'unusable'}")
+                if good:
+                    got = True
+                    break
+                time.sleep(6)
+            if got:
                 break
-            time.sleep(3)
+        if not got:
+            # a layer we could not fetch is an empty layer, not a failed build
+            json.dump({"elements": []}, open(fp, "w", encoding="utf-8"))
+            print(f"  osm {name}: giving up, layer will be empty")
 
 
 def stage_coverage(d, lat0, lon0, radius, spacing):
@@ -393,7 +414,8 @@ def main():
     except Exception:
         pass
     title = a.name or (county if county else "Survey")
-    slug = a.slug or "".join(ch if ch.isalnum() else "_" for ch in title.lower()).strip("_")
+    slug = a.slug or re.sub(r"_+", "_",
+                        "".join(ch if ch.isalnum() else "_" for ch in title.lower())).strip("_")
     d = os.path.join(HERE, "sites", slug)
     os.makedirs(d, exist_ok=True)
     print(f"title '{title}'  dir sites/{slug}"
@@ -404,8 +426,8 @@ def main():
         print(" [census]"); stage_census(d, lat0, lon0, a.radius)
     if "terrain" in force or not os.path.exists(os.path.join(d, "terrain.webp")):
         print(" [terrain]"); stage_terrain(d, lat0, lon0, a.radius)
-    if "osm" in force or not os.path.exists(os.path.join(d, "osm", "roads.json")):
-        print(" [osm]"); stage_osm(d, lat0, lon0, a.radius)
+    if True:   # stage_osm decides per layer what is cached
+        print(" [osm]"); stage_osm(d, lat0, lon0, a.radius, force="osm" in force)
     print(" [coverage]"); stage_coverage(d, lat0, lon0, a.radius, a.spacing)
 
     print(" [assemble]")

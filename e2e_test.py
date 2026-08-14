@@ -19,11 +19,12 @@ def flat(s):
     return " ".join(x.strip() for x in (s or "").splitlines() if x.strip())
 
 
-def mouse(ch, kind, x, y, btn="left", clicks=1):
-    ch.cmd("Input.dispatchMouseEvent", {"type": kind, "x": x, "y": y,
-                                        "button": btn if kind != "mouseMoved" else "none",
-                                        "buttons": 1 if kind == "mouseMoved" else 0,
-                                        "clickCount": clicks})
+def mouse(ch, kind, x, y, btn="left", clicks=1, buttons=None):
+    if buttons is None:
+        buttons = 1 if kind == "mousePressed" else 0
+    ch.cmd("Input.dispatchMouseEvent", {"type": kind, "x": x, "y": y, "button": btn,
+                                        "buttons": buttons,
+                                        "clickCount": 0 if kind == "mouseMoved" else clicks})
 
 
 def shot(ch, name):
@@ -47,13 +48,26 @@ try:
                     "document.getElementById('l-hw1').children.length")
     trails = ch.eval("document.getElementById('l-trmaj').children.length + "
                      "document.getElementById('l-trmin').children.length")
-    check("page loads with correct title", title == "Custer County Signal Map", title)
+    check("page title is Cellular Signal Map", title == "Cellular Signal Map", title)
+    check("h1 is Cellular Signal Map",
+          ch.eval("document.querySelector('h1').textContent") == "Cellular Signal Map")
+    eyebrow = ch.eval("document.querySelector('.eyebrow').textContent")
+    check("header eyebrow has no 'Replicated' and no dot",
+          "Replicated" not in eyebrow and "·" not in eyebrow, eyebrow)
+    check("coverage table open by default",
+          ch.eval("document.getElementById('tabledetails').open") is True)
+    check("survey list rendered",
+          ch.eval("document.querySelectorAll('.spill').length") >= 1,
+          ch.eval("Array.from(document.querySelectorAll('.spill')).map(b=>b.textContent).join(', ')"))
     check("coverage hexes rendered", hexes == 1459, hexes)
     check("OSM roads rendered", roads > 1000, roads)
     check("OSM trails rendered", trails > 2000, trails)
-    check("terrain image inlined", ch.eval(
-        "document.getElementById('terrain').getAttribute('href').slice(0,24)")
-        .startswith("data:image/webp"))
+    thref = ch.eval("document.getElementById('terrain').getAttribute('href')")
+    check("terrain loaded from the survey pack",
+          thref.startswith("surveys/") and thref.endswith("terrain.webp"), thref)
+    check("terrain file actually fetches",
+          ch.eval("fetch(document.getElementById('terrain').getAttribute('href'))"
+                  ".then(r=>r.ok).catch(()=>false)") is True)
     ch.eval("document.documentElement.setAttribute('data-theme','light')")
     time.sleep(.6)
     shot(ch, "e2e_1_loaded.png")
@@ -86,18 +100,7 @@ try:
               "(document.querySelector('.fcclink')||{}).href||''"))
     shot(ch, "e2e_2_pinned.png")
 
-    # ------------------------------------------------------------- 4. panning
-    vb0 = ch.eval("document.getElementById('map').getAttribute('viewBox')")
-    mouse(ch, "mousePressed", mx, my)
-    for i in range(1, 6):
-        mouse(ch, "mouseMoved", mx - i * 22, my - i * 14)
-        time.sleep(.05)
-    mouse(ch, "mouseReleased", mx - 110, my - 70)
-    time.sleep(.5)
-    vb1 = ch.eval("document.getElementById('map').getAttribute('viewBox')")
-    check("dragging pans the map", vb0 != vb1, vb1)
-
-    # ------------------------------------------------------------- 5. zooming
+    # ------------------------------------------------------------- 4. zooming
     z0 = ch.eval("document.getElementById('zlvl').textContent")
     for _ in range(6):
         ch.cmd("Input.dispatchMouseEvent", {"type": "mouseWheel", "x": mx, "y": my,
@@ -110,12 +113,43 @@ try:
     check("line widths rescale with zoom", upx < 0.1, "--upx=" + str(upx))
     shot(ch, "e2e_3_zoomed.png")
 
+    # ---- 5. panning. Only meaningful once zoomed: at 1x the whole circle is
+    #        already in frame, so the view centre is clamped to the origin.
+    vb_full = ch.eval("document.getElementById('map').getAttribute('viewBox')")
+    ch.eval("document.getElementById('zrst').click()")
+    time.sleep(.4)
+    mouse(ch, "mousePressed", mx, my, buttons=1)
+    mouse(ch, "mouseMoved", mx - 90, my - 60, buttons=1)
+    mouse(ch, "mouseReleased", mx - 90, my - 60, buttons=0)
+    time.sleep(.4)
+    check("pan is clamped at 1x (whole circle already visible)",
+          ch.eval("document.getElementById('map').getAttribute('viewBox')").startswith("-53"))
+    for _ in range(6):
+        ch.cmd("Input.dispatchMouseEvent", {"type": "mouseWheel", "x": mx, "y": my,
+                                            "deltaX": 0, "deltaY": -120})
+        time.sleep(.12)
+    time.sleep(.4)
+    vb0 = ch.eval("document.getElementById('map').getAttribute('viewBox')")
+    pin_before = ch.eval("(document.querySelector('#readout .coord')||{}).textContent||''")
+    mouse(ch, "mousePressed", mx, my, buttons=1)
+    for i in range(1, 9):
+        mouse(ch, "mouseMoved", mx - i * 18, my - i * 11, buttons=1)
+        time.sleep(.04)
+    mouse(ch, "mouseReleased", mx - 144, my - 88, buttons=0)
+    time.sleep(.5)
+    vb1 = ch.eval("document.getElementById('map').getAttribute('viewBox')")
+    check("dragging pans the map when zoomed", vb0 != vb1, vb1[:44])
+    pin_after = ch.eval("(document.querySelector('#readout .coord')||{}).textContent||''")
+    check("a drag does not change the pinned point", pin_before == pin_after,
+          repr(pin_before) + " -> " + repr(pin_after))
+
     # ------------------------------------------- 6. coordinate entry (typed)
-    for query, expect_in in [("38.1339, -105.4675", "mi from center"),
-                             ("(38.2461363, -105.6641888)", "mi from center"),
-                             ("38.25228°N 105.66813°W", "mi from center"),
-                             ("N38 15 8.2 W105 40 5.3", "mi from center"),
-                             ("39.7392, -104.9847", "beyond this")]:
+    for query, expect_in in [("38.1339, -105.4675", "mi from the centre"),
+                             ("(38.2461363, -105.6641888)", "mi from the centre"),
+                             ("38.25228°N 105.66813°W", "mi from the centre"),
+                             ("N38 15 8.2 W105 40 5.3", "mi from the centre"),
+                             ("39.7392, -104.9847", "no survey covers"),
+                             ("51.5074, -0.1278", "outside the United States")]:
         box = ch.eval("(function(){var b=document.getElementById('findbox')"
                       ".getBoundingClientRect();return [b.left+b.width/2,b.top+b.height/2]})()")
         mouse(ch, "mousePressed", box[0], box[1], clicks=1)
@@ -131,10 +165,22 @@ try:
         msg = flat(ch.eval("document.getElementById('findmsg').textContent"))
         check("typed coordinate '" + query + "'", typed == query and expect_in in msg, msg)
 
+    # the out-of-survey state must offer a way to build one
+    ch.eval("document.getElementById('findbox').select()")
+    ch.cmd("Input.insertText", {"text": "39.7392, -104.9847"})
+    ch.eval("document.getElementById('findgo').click()")
+    time.sleep(.9)
+    empty = flat(ch.eval("document.getElementById('state-empty').innerText"))
+    check("out-of-survey US point explains and offers a build",
+          "No survey covers" in empty and "nbm_site.py" in empty, empty[:120])
+    check("build-on-Actions link present",
+          "build-survey.yml" in ch.eval(
+              "Array.from(document.querySelectorAll('#state-empty a')).map(a=>a.href).join(' ')"))
+
     ch.eval("document.getElementById('findbox').select()")
     ch.cmd("Input.insertText", {"text": "38.1339, -105.4675"})
     ch.eval("document.getElementById('findgo').click()")
-    time.sleep(.8)
+    time.sleep(1.4)
     body = flat(ch.eval("document.getElementById('readout').innerText"))
     check("coordinate jump pins and reports a point",
           "Pinned" in ch.eval("document.getElementById('rt').textContent") and "AT&T" in body,

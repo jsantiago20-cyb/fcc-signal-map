@@ -1,7 +1,7 @@
 {
  "surveys": [
   {
-   "slug": "custer_county_signal_map",
+   "slug": "custer_county_co",
    "name": "Custer County, CO",
    "center": [
     38.25228,
@@ -19,7 +19,28 @@
     "Verizon",
     "Viaero Wireless"
    ]
+  },
+  {
+   "slug": "denver_county_co",
+   "name": "Denver County, CO",
+   "center": [
+    39.7392,
+    -104.9847
+   ],
+   "radius": 50.0,
+   "spacing": 2.5,
+   "vintage": "December 31, 2025",
+   "verslug": "dec2025",
+   "elev": 5276.206277992139,
+   "points": 1459,
+   "carriers": [
+    "T-Mobile",
+    "AT&T",
+    "Verizon",
+    "Viaero Wireless",
+    "Union Telephone Company"
+   ]
   }
  ],
- "default": "custer_county_signal_map"
+ "default": "custer_county_co"
 }

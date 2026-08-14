@@ -10,6 +10,16 @@ Type any coordinate in the United States. If a survey already covers it, the map
 opens on that point with the full carrier breakdown. If not, the page says so and
 gives you a one-click way to build one.
 
+Published surveys:
+
+| area | centre | radius | carriers |
+|---|---|---|---|
+| Custer County, CO | 38.25228N 105.66813W | 50 mi | AT&T, T-Mobile, Verizon, Viaero |
+| Denver County, CO | 39.73920N 104.98470W | 50 mi | T-Mobile, AT&T, Verizon, Viaero, Union Telephone |
+
+The carrier list is derived per survey, so a new area picks up whatever regional
+operators file there.
+
 ## What it does
 
 - **Any US coordinate** — decimal, signed, parenthesised, hemisphere letters, or
