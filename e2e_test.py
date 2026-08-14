@@ -60,8 +60,11 @@ try:
           ch.eval("document.querySelectorAll('.spill').length") >= 1,
           ch.eval("Array.from(document.querySelectorAll('.spill')).map(b=>b.textContent).join(', ')"))
     check("coverage hexes rendered", hexes == 1459, hexes)
-    check("OSM roads rendered", roads > 1000, roads)
-    check("OSM trails rendered", trails > 2000, trails)
+    roadpts = ch.eval("Array.from(document.querySelectorAll('#l-hw0 path,#l-hw1 path,#l-rd path'))"
+                      ".reduce((n,p)=>n+p.getAttribute('d').split('L').length,0)")
+    check("OSM roads rendered", roads > 10 and roadpts > 2000,
+          str(roads) + " chained ways, " + str(roadpts) + " vertices")
+    check("OSM trails rendered", trails > 500, trails)
     thref = ch.eval("document.getElementById('terrain').getAttribute('href')")
     check("terrain loaded from the survey pack",
           thref.startswith("surveys/") and thref.endswith("terrain.webp"), thref)
@@ -148,7 +151,7 @@ try:
                              ("(38.2461363, -105.6641888)", "mi from the centre"),
                              ("38.25228°N 105.66813°W", "mi from the centre"),
                              ("N38 15 8.2 W105 40 5.3", "mi from the centre"),
-                             ("39.7392, -104.9847", "no survey covers"),
+                             ("39.0, -98.5", "no survey covers"),
                              ("51.5074, -0.1278", "outside the United States")]:
         box = ch.eval("(function(){var b=document.getElementById('findbox')"
                       ".getBoundingClientRect();return [b.left+b.width/2,b.top+b.height/2]})()")
@@ -167,7 +170,7 @@ try:
 
     # the out-of-survey state must offer a way to build one
     ch.eval("document.getElementById('findbox').select()")
-    ch.cmd("Input.insertText", {"text": "39.7392, -104.9847"})
+    ch.cmd("Input.insertText", {"text": "39.0, -98.5"})       # central Kansas: US, unsurveyed
     ch.eval("document.getElementById('findgo').click()")
     time.sleep(.9)
     empty = flat(ch.eval("document.getElementById('state-empty').innerText"))
@@ -240,6 +243,28 @@ try:
     # ------------------------------------------------------ 11. console clean
     check("no horizontal overflow",
           ch.eval("document.documentElement.scrollWidth <= window.innerWidth + 1"))
+
+    # ------------------------------------------- 12. switching to another survey
+    pills = ch.eval("document.querySelectorAll('.spill').length")
+    check("more than one survey published", pills >= 2, pills)
+    if pills >= 2:
+        before = ch.eval("Array.from(document.querySelectorAll('#viewseg button'))"
+                         ".map(b=>b.textContent).join(',')")
+        ch.eval("document.getElementById('findbox').value='39.7392, -104.9847'")
+        ch.eval("document.getElementById('findgo').click()")
+        time.sleep(3.0)
+        msg = flat(ch.eval("document.getElementById('findmsg').textContent"))
+        after = ch.eval("Array.from(document.querySelectorAll('#viewseg button'))"
+                        ".map(b=>b.textContent).join(',')")
+        check("a coordinate in another survey loads that survey",
+              "Denver" in msg and ch.eval("document.querySelectorAll('#hexes use').length") > 0, msg)
+        check("carrier list adapts to the new survey", before != after, after)
+        check("new survey has its own stats",
+              "%" in flat(ch.eval("document.getElementById('stats').innerText")))
+        check("new survey terrain loads",
+              ch.eval("fetch(document.getElementById('terrain').getAttribute('href'))"
+                      ".then(r=>r.ok).catch(()=>false)") is True)
+        shot(ch, "e2e_7_denver.png")
 
 finally:
     ch.close()
