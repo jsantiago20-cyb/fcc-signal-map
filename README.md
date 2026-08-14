@@ -82,9 +82,21 @@ Requests are issued four at a time. Please keep it that way.
 | `template.html` | the page — all rendering and interaction |
 | `ascii_fix.py` | escapes non-ASCII inside the script block so the page is charset-proof |
 | `nbm_query.py` | small CLI for a single point, no map |
+| `e2e_test.py` | drives real Chrome against the live URL and asserts the whole flow |
 | `sites/*/coverage.json` | harvested FCC data, so a rebuild need not re-query |
 
 Requires Python 3 and Chrome. Pillow is used for the terrain image.
+
+## Testing
+
+```bash
+python e2e_test.py
+```
+
+Loads the deployed page in a real Chrome and drives it with genuine mouse,
+wheel and keyboard events: clicking a hex, dragging to pan, scrolling to zoom,
+typing each coordinate format, switching views, moving the signal filter, and
+toggling layers — asserting on what the page actually renders.
 
 ## Reading the map honestly
 
