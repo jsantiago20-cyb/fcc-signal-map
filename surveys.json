@@ -40,6 +40,26 @@
     "Viaero Wireless",
     "Union Telephone Company"
    ]
+  },
+  {
+   "slug": "rawah_cameron_pass_co",
+   "name": "Rawah / Cameron Pass, CO",
+   "center": [
+    40.65,
+    -105.88
+   ],
+   "radius": 45.0,
+   "spacing": 2.5,
+   "vintage": "December 31, 2025",
+   "verslug": "dec2025",
+   "elev": 10428.58247261883,
+   "points": 1165,
+   "carriers": [
+    "T-Mobile",
+    "AT&T",
+    "Union Telephone Company",
+    "Verizon"
+   ]
   }
  ],
  "default": "custer_county_co"
