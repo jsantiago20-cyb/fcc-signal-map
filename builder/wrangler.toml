@@ -1,0 +1,6 @@
+name = "fcc-signal-map-builder"
+main = "worker.js"
+compatibility_date = "2026-09-11"
+
+# The GitHub token is a secret, not a variable:
+#   npx wrangler secret put GH_TOKEN

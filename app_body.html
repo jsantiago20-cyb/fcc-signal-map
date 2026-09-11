@@ -682,6 +682,10 @@ function jumpTo(lat, lon){
    issue, which needs you signed in to GitHub. Either way it then watches
    surveys.json and opens the map the moment the pack lands.                   */
 
+/* The builder is a small Cloudflare Worker that holds the GitHub token so this
+   page does not have to. Empty means it is not deployed; the page then falls
+   back to a token saved in this browser, and after that to a GitHub issue. */
+const BUILDER  = "";
 const TOK_KEY  = "fcc-signal-map.token";
 const PEND_KEY = "fcc-signal-map.pending";
 const DEF_RADIUS = 50, DEF_SPACING = 2.5;
@@ -712,6 +716,25 @@ function issueURL(lat, lon, radius, spacing){
     "&labels="+encodeURIComponent("survey-request")+
     "&body="+encodeURIComponent(requestBody(lat, lon, radius, spacing));
 }
+/* Ask the builder first; fall back to a token in this browser if there is one. */
+async function startBuild(lat, lon, radius, spacing){
+  if(BUILDER){
+    let r, j = {};
+    try{
+      r = await fetch(BUILDER+"/build", {
+        method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({ lat: Number(lat.toFixed(6)), lon: Number(lon.toFixed(6)),
+                               radius: radius, spacing: spacing })});
+      j = await r.json().catch(()=>({}));
+    }catch(err){
+      if(!ghToken()) throw new Error("the builder did not answer");
+    }
+    if(r && r.ok && j.ok) return;
+    if(!ghToken()) throw new Error(j.error || ("the builder returned "+(r ? r.status : "nothing")));
+  }
+  return dispatchBuild(lat, lon, radius, spacing);
+}
+
 async function dispatchBuild(lat, lon, radius, spacing){
   const r = await fetch(
     "https://api.github.com/repos/"+REPO+"/actions/workflows/build-survey.yml/dispatches", {
@@ -752,11 +775,12 @@ async function autoBuild(lat, lon){
     '<h3><span class="spin"></span>Starting a survey for '+prettyCoord(lat, lon)+'</h3>'+
     '<p>Asking GitHub Actions to harvest this area.</p>';
   try{
-    await dispatchBuild(lat, lon, DEF_RADIUS, DEF_SPACING);
+    await startBuild(lat, lon, DEF_RADIUS, DEF_SPACING);
     watchBuild(lat, lon, Date.now(), "", true);
   }catch(err){
     notSurveyed(lat, lon, { noauto: true,
-      note: "The saved token could not start the run: "+String(err.message || err)+"." });
+      note: (BUILDER && !ghToken() ? "The build could not be started: "
+             : "The saved token could not start the run: ")+String(err.message || err)+"." });
   }
 }
 
@@ -769,7 +793,7 @@ function watchBuild(lat, lon, started, note, confirmed){
               run: null, confirmed: !!confirmed };
   drawWatching();
   watcher.packTimer = setInterval(checkForPack, 20000);
-  watcher.runTimer  = setInterval(pollRun, ghToken() ? 20000 : 90000);
+  watcher.runTimer  = setInterval(pollRun, (BUILDER || ghToken()) ? 20000 : 90000);
   pollRun();
 }
 
@@ -806,12 +830,18 @@ async function checkForPack(){
 async function pollRun(){
   if(!watcher) return;
   try{
-    const h = { "Accept": "application/vnd.github+json" };
-    if(ghToken()) h["Authorization"] = "Bearer "+ghToken();
-    const j = await fetch("https://api.github.com/repos/"+REPO+
-      "/actions/workflows/build-survey.yml/runs?per_page=1", {headers:h})
-      .then(r => r.ok ? r.json() : null);
-    const run = j && j.workflow_runs && j.workflow_runs[0];
+    let run = null;
+    if(BUILDER){
+      const j = await fetch(BUILDER+"/status").then(r => r.ok ? r.json() : null);
+      run = j && j.run;
+    }else{
+      const h = { "Accept": "application/vnd.github+json" };
+      if(ghToken()) h["Authorization"] = "Bearer "+ghToken();
+      const j = await fetch("https://api.github.com/repos/"+REPO+
+        "/actions/workflows/build-survey.yml/runs?per_page=1", {headers:h})
+        .then(r => r.ok ? r.json() : null);
+      run = j && j.workflow_runs && j.workflow_runs[0];
+    }
     if(run && Date.parse(run.run_started_at) > watcher.started - 180000){
       watcher.run = run;
       if(!watcher.confirmed){        // the request did get submitted after all
@@ -865,7 +895,7 @@ function notSurveyed(lat, lon, opts){
     watchBuild(lat, lon, pend.started, "Picking up the request you started earlier.", true);
     return;
   }
-  if(ghToken() && !opts.noauto){ autoBuild(lat, lon); return; }
+  if((BUILDER || ghToken()) && !opts.noauto){ autoBuild(lat, lon); return; }
 
   showState("state-empty");
   const near = nearestSurvey(lat, lon);

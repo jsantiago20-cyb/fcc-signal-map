@@ -5,3 +5,8 @@ sites/*/terrain.webp
 sites/smoketest/
 previews/
 _hillshade.png
+
+# local Worker secrets
+builder/.dev.vars
+builder/node_modules/
+builder/.wrangler/
