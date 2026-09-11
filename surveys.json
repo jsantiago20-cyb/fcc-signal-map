@@ -60,6 +60,25 @@
     "Union Telephone Company",
     "Verizon"
    ]
+  },
+  {
+   "slug": "san_bernardino_county_ca",
+   "name": "San Bernardino County, CA",
+   "center": [
+    34.2439,
+    -116.9114
+   ],
+   "radius": 50.0,
+   "spacing": 2.5,
+   "vintage": "December 31, 2025",
+   "verslug": "dec2025",
+   "elev": 6752.259478037519,
+   "points": 1459,
+   "carriers": [
+    "AT&T",
+    "T-Mobile",
+    "Verizon"
+   ]
   }
  ],
  "default": "custer_county_co"
