@@ -53,12 +53,15 @@ jobs:
   build:
     # Issue-borne requests only run for the owner, or once someone with write
     # access adds the "approved" label. Anyone else gets a note from the report
-    # job instead of a runner.
+    # job instead of a runner. Opening an issue with labels fires "opened" and
+    # "labeled" both, so only the approval label counts on the second.
     if: >-
       github.event_name != 'issues' ||
       (startsWith(github.event.issue.title, 'Survey request:') &&
-       (github.event.issue.user.login == github.repository_owner ||
-        contains(github.event.issue.labels.*.name, 'approved')))
+       ((github.event.action == 'opened' &&
+         (github.event.issue.user.login == github.repository_owner ||
+          contains(github.event.issue.labels.*.name, 'approved'))) ||
+        (github.event.action == 'labeled' && github.event.label.name == 'approved')))
     runs-on: ubuntu-latest
     timeout-minutes: 90
     outputs:
@@ -124,7 +127,7 @@ jobs:
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add surveys surveys.json index.html
+          git add -A surveys surveys.json index.html
           if git diff --staged --quiet; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
             echo "No change - that survey was already published."
@@ -132,15 +135,34 @@ jobs:
           fi
           slug=$(git diff --staged --name-only | sed -n "s#^surveys/\([^/]*\)/.*#\1#p" | head -1)
           echo "slug=$slug" >> "$GITHUB_OUTPUT"
-          git commit -m "Add survey for $AT ($RADIUS mi)"
-          # Another run may have pushed while this one was harvesting.
+
+          # Keep the pack aside, then graft it onto whatever main holds now.
+          # Another run can publish while this one harvests, and rebasing a
+          # freshly written data.json only ever produces a conflict.
+          keep=$(mktemp -d)
+          cp -r "surveys/$slug" "$keep/"
+          cp surveys.json "$keep/harvested.json"
+
           for try in 1 2 3 4 5; do
+            git fetch --quiet origin main
+            git reset --hard --quiet origin/main
+            git checkout --quiet -B main origin/main
+            rm -rf "surveys/$slug"
+            cp -r "$keep/$slug" surveys/
+            python .github/scripts/merge_manifest.py "$keep/harvested.json" "$slug"
+            python build_app.py
+            git add -A surveys surveys.json index.html
+            if git diff --staged --quiet; then
+              echo "changed=false" >> "$GITHUB_OUTPUT"
+              echo "No change - that survey was already published."
+              exit 0
+            fi
+            git commit --quiet -m "Add survey for $AT ($RADIUS mi)"
             if git push; then
               echo "changed=true" >> "$GITHUB_OUTPUT"
               exit 0
             fi
-            echo "push rejected, rebasing (attempt $try)"
-            git pull --rebase --autostash origin main || true
+            echo "push rejected, another run got there first (attempt $try)"
             sleep $((try * 5))
           done
           echo "could not push the pack after five tries" >&2
@@ -174,7 +196,9 @@ jobs:
     needs: [build, deploy]
     if: >-
       always() && github.event_name == 'issues' &&
-      startsWith(github.event.issue.title, 'Survey request:')
+      startsWith(github.event.issue.title, 'Survey request:') &&
+      (github.event.action == 'opened' ||
+       (github.event.action == 'labeled' && github.event.label.name == 'approved'))
     runs-on: ubuntu-latest
     permissions:
       issues: write
