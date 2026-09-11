@@ -3,7 +3,8 @@ import base64, os, sys, tempfile, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from cdp import Chrome
 
-URL = "https://jsantiago20-cyb.github.io/fcc-signal-map/"
+URL = (sys.argv[1] if len(sys.argv) > 1 else
+       os.environ.get("NBM_URL", "https://jsantiago20-cyb.github.io/fcc-signal-map/"))
 SHOTS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "previews")
 os.makedirs(SHOTS, exist_ok=True)
 

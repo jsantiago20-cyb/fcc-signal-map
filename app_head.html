@@ -218,7 +218,13 @@ table.full tr:last-child td{border-bottom:0}
 .state .row{display:flex; gap:10px; justify-content:center; flex-wrap:wrap; margin-top:16px}
 .state a.btn{font-size:13px; font-weight:600; padding:8px 15px; border-radius:3px;
   text-decoration:none; background:var(--ink); color:var(--ground)}
-.state a.btn.alt{background:transparent; color:var(--ink); border:1px solid var(--rule)}
+.state a.btn.alt, .state button.btn.alt{background:transparent; color:var(--ink);
+  border:1px solid var(--rule)}
+.state button.btn{font:inherit; font-size:13px; font-weight:600; padding:8px 15px; border-radius:3px;
+  background:var(--ink); color:var(--ground); border:1px solid transparent; cursor:pointer}
+.state button.btn:disabled{opacity:.55; cursor:default}
+.state #tokform{margin-top:14px}
+.state h3 .spin{margin-right:9px}
 .spin{display:inline-block; width:15px; height:15px; border:2px solid var(--rule);
   border-top-color:var(--ramp-3); border-radius:50%; animation:sp .8s linear infinite;
   vertical-align:-3px; margin-right:8px}

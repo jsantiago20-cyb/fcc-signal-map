@@ -1,18 +1,28 @@
 name: Build a survey
 
-# Harvests a coverage survey around a coordinate and commits it as a pack.
+# Harvests a coverage survey around a coordinate and publishes it as a pack.
+#
 # broadbandmap.fcc.gov refuses browser requests from other origins, so the data
-# has to be collected by a real Chrome — this runner is that Chrome.
+# has to be collected by a real Chrome - this runner is that Chrome. Three ways
+# in, all landing on the same parser:
+#
+#   workflow_dispatch    a human filling the form on the Actions tab
+#   issues               the map page's "Build this survey" button, which opens
+#                        an issue titled "Survey request: <lat>, <lon>"
+#   repository_dispatch  a token-holding client calling the API directly
+#
+# Nothing from a request is ever interpolated into a shell command; it all
+# travels as environment variables into .github/scripts/parse_request.py.
 
 on:
   workflow_dispatch:
     inputs:
       at:
-        description: 'Coordinate — "39.7392, -104.9847" or "38.25228N 105.66813W" or DMS'
+        description: 'Coordinate - "39.7392, -104.9847" or "38.25228N 105.66813W" or DMS'
         required: true
         type: string
       radius:
-        description: "Survey radius in miles"
+        description: "Survey radius in miles (5 to 100)"
         required: false
         default: "50"
         type: string
@@ -26,9 +36,14 @@ on:
         required: false
         default: ""
         type: string
+  issues:
+    types: [opened, labeled]
+  repository_dispatch:
+    types: [build-survey]
 
 permissions:
   contents: write
+  issues: write
 
 concurrency:
   group: build-survey
@@ -36,8 +51,25 @@ concurrency:
 
 jobs:
   build:
+    # Issue-borne requests only run for the owner, or once someone with write
+    # access adds the "approved" label. Anyone else gets a note from the report
+    # job instead of a runner.
+    if: >-
+      github.event_name != 'issues' ||
+      (startsWith(github.event.issue.title, 'Survey request:') &&
+       (github.event.issue.user.login == github.repository_owner ||
+        contains(github.event.issue.labels.*.name, 'approved')))
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    outputs:
+      ok: ${{ steps.req.outputs.ok }}
+      reason: ${{ steps.req.outputs.reason }}
+      at: ${{ steps.req.outputs.at }}
+      pretty: ${{ steps.req.outputs.pretty }}
+      radius: ${{ steps.req.outputs.radius }}
+      spacing: ${{ steps.req.outputs.spacing }}
+      changed: ${{ steps.commit.outputs.changed }}
+      slug: ${{ steps.commit.outputs.slug }}
     steps:
       - uses: actions/checkout@v4
 
@@ -51,31 +83,129 @@ jobs:
       - name: Show Chrome version
         run: google-chrome --version
 
-      - name: Harvest and pack the survey
+      - name: Read the request
+        id: req
+        env:
+          EVENT: ${{ github.event_name }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          IN_AT: ${{ inputs.at || github.event.client_payload.at }}
+          IN_RADIUS: ${{ inputs.radius || github.event.client_payload.radius }}
+          IN_SPACING: ${{ inputs.spacing || github.event.client_payload.spacing }}
+          IN_NAME: ${{ inputs.name || github.event.client_payload.name }}
+        run: python .github/scripts/parse_request.py
+
+      - name: Nothing to build
+        if: steps.req.outputs.ok != 'true'
+        env:
+          REASON: ${{ steps.req.outputs.reason }}
         run: |
-          python nbm_site.py \
-            --at "${{ inputs.at }}" \
-            --radius "${{ inputs.radius }}" \
-            --spacing "${{ inputs.spacing }}" \
-            ${{ inputs.name && format('--name "{0}"', inputs.name) || '' }}
+          echo "### No survey built" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "$REASON" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Harvest and pack the survey
+        if: steps.req.outputs.ok == 'true'
+        env:
+          AT: ${{ steps.req.outputs.at }}
+          RADIUS: ${{ steps.req.outputs.radius }}
+          SPACING: ${{ steps.req.outputs.spacing }}
+          NAME: ${{ steps.req.outputs.name }}
+        run: |
+          args=(--at "$AT" --radius "$RADIUS" --spacing "$SPACING")
+          if [ -n "$NAME" ]; then args+=(--name "$NAME"); fi
+          python nbm_site.py "${args[@]}"
 
       - name: Commit the pack
+        id: commit
+        if: steps.req.outputs.ok == 'true'
+        env:
+          AT: ${{ steps.req.outputs.at }}
+          RADIUS: ${{ steps.req.outputs.radius }}
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add surveys surveys.json index.html
           if git diff --staged --quiet; then
-            echo "No change — that survey was already published."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "No change - that survey was already published."
             exit 0
           fi
-          git commit -m "Add survey for ${{ inputs.at }} (${{ inputs.radius }} mi)"
-          git push
+          slug=$(git diff --staged --name-only | sed -n "s#^surveys/\([^/]*\)/.*#\1#p" | head -1)
+          echo "slug=$slug" >> "$GITHUB_OUTPUT"
+          git commit -m "Add survey for $AT ($RADIUS mi)"
+          # Another run may have pushed while this one was harvesting.
+          for try in 1 2 3 4 5; do
+            if git push; then
+              echo "changed=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "push rejected, rebasing (attempt $try)"
+            git pull --rebase --autostash origin main || true
+            sleep $((try * 5))
+          done
+          echo "could not push the pack after five tries" >&2
+          exit 1
 
-      - name: Summary
+  # A push made with GITHUB_TOKEN does not start another workflow, so the Pages
+  # deploy happens here rather than waiting on pages.yml.
+  deploy:
+    needs: build
+    if: needs.build.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: .
+      - id: deployment
+        uses: actions/deploy-pages@v4
+
+  report:
+    needs: [build, deploy]
+    if: >-
+      always() && github.event_name == 'issues' &&
+      startsWith(github.event.issue.title, 'Survey request:')
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      NUM: ${{ github.event.issue.number }}
+      SITE: https://jsantiago20-cyb.github.io/fcc-signal-map/
+      RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      BUILD: ${{ needs.build.result }}
+      OK: ${{ needs.build.outputs.ok }}
+      REASON: ${{ needs.build.outputs.reason }}
+      CHANGED: ${{ needs.build.outputs.changed }}
+      PRETTY: ${{ needs.build.outputs.pretty }}
+      AT: ${{ needs.build.outputs.at }}
+    steps:
+      - name: Answer the request
         run: |
-          echo "### Survey built" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Coordinate: \`${{ inputs.at }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "Radius: ${{ inputs.radius }} mi · spacing ${{ inputs.spacing }} mi" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "The site redeploys automatically; the new area appears in the survey list." >> $GITHUB_STEP_SUMMARY
+          close=yes
+          point=$(echo "$AT" | tr -d " ")
+          if [ "$BUILD" = "skipped" ]; then
+            body="A survey build runs for the repository owner, or once someone with write access labels this issue approved. The request stays here until then."
+            close=no
+          elif [ "$BUILD" != "success" ]; then
+            body="The build failed. The log is at $RUN"
+            close=no
+          elif [ "$OK" != "true" ]; then
+            body="$REASON"
+          elif [ "$CHANGED" = "true" ]; then
+            body="Survey built for **$PRETTY** and published. It is live at ${SITE}?at=${point}"
+          else
+            body="That area was already published, so nothing changed. Open it at ${SITE}?at=${point}"
+          fi
+          gh issue comment "$NUM" --repo "$GITHUB_REPOSITORY" --body "$body"
+          if [ "$close" = "yes" ]; then gh issue close "$NUM" --repo "$GITHUB_REPOSITORY"; fi

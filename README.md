@@ -52,10 +52,24 @@ centre. The site loads whichever survey contains your coordinate.
 
 ## Building a survey
 
-**On GitHub Actions** — no local setup. Open
+**From the page itself** — nothing to install. Type a coordinate no survey
+covers, click **Build this survey**, and submit the request GitHub opens. That
+files an issue titled `Survey request: <lat>, <lon>`, which starts the workflow;
+the page keeps checking and opens the new area by itself a few minutes later.
+Save a fine-grained token in the page (Actions: read and write, this repository)
+and the button skips the issue and starts the run directly.
+
+**On GitHub Actions** — for other radii and spacings. Open
 [Actions → Build a survey](../../actions/workflows/build-survey.yml), click *Run
-workflow*, and give it a coordinate. It harvests, commits the pack, and the site
-redeploys with the new area in the list.
+workflow*, and give it a coordinate.
+
+All three routes land on `.github/scripts/parse_request.py`, which reads the
+request from environment variables, rejects anything that is not a US coordinate
+or would cost more than 3,000 samples, and says so on the issue if an existing
+survey already covers the point. Issues from anyone but the repository owner
+wait for an `approved` label before a runner starts. The workflow commits the
+pack and then deploys Pages in the same run, because a push made with
+`GITHUB_TOKEN` does not trigger `pages.yml`.
 
 **Locally:**
 
@@ -116,6 +130,8 @@ Requests are issued four at a time. Please keep it that way.
 | `app_head.html`, `app_body.html` | the page; `build_app.py` joins them into `index.html` |
 | `build_app.py` | concatenates the shell and escapes non-ASCII in the script |
 | `e2e_test.py` | drives real Chrome against the live URL and asserts the whole flow |
+| `.github/workflows/build-survey.yml` | harvests on request, commits the pack, deploys the site |
+| `.github/scripts/parse_request.py` | validates a request from the page, the form or the API |
 | `nbm_query.py` | small CLI for a single point, no map |
 | `surveys.json` | index of published surveys |
 | `surveys/<slug>/` | a published pack: `data.json` + `terrain.webp` |
@@ -128,7 +144,9 @@ Requires Python 3 and Chrome. Pillow is used for the terrain image.
 ## Testing
 
 ```bash
-python e2e_test.py
+python e2e_test.py                      # the deployed page
+python -m http.server 8765              # or a local build, from the repo root
+NBM_URL=http://localhost:8765/ python e2e_test.py
 ```
 
 Loads the deployed page in a real Chrome and drives it with genuine mouse, wheel
