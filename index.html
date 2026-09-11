@@ -990,17 +990,20 @@ async function autoBuild(lat, lon){
     '<p>Asking GitHub Actions to harvest this area.</p>';
   try{
     await dispatchBuild(lat, lon, DEF_RADIUS, DEF_SPACING);
-    watchBuild(lat, lon, Date.now(), "");
+    watchBuild(lat, lon, Date.now(), "", true);
   }catch(err){
     notSurveyed(lat, lon, { noauto: true,
       note: "The saved token could not start the run: "+String(err.message || err)+"." });
   }
 }
 
-function watchBuild(lat, lon, started, note){
+function watchBuild(lat, lon, started, note, confirmed){
   stopWatching();
-  setPendingReq({ lat: lat, lon: lon, started: started });
-  watcher = { lat: lat, lon: lon, started: started, note: note || "", run: null };
+  // Only a dispatch we saw succeed is worth remembering across a reload. A
+  // request handed to GitHub in another tab may never be submitted.
+  if(confirmed) setPendingReq({ lat: lat, lon: lon, started: started });
+  watcher = { lat: lat, lon: lon, started: started, note: note || "",
+              run: null, confirmed: !!confirmed };
   drawWatching();
   watcher.packTimer = setInterval(checkForPack, 20000);
   watcher.runTimer  = setInterval(pollRun, ghToken() ? 20000 : 90000);
@@ -1010,6 +1013,12 @@ function watchBuild(lat, lon, started, note){
 async function checkForPack(){
   if(!watcher) return;
   const lat = watcher.lat, lon = watcher.lon;
+  if(!watcher.confirmed && !watcher.run && Date.now() - watcher.started > 240000){
+    stopWatching(); setPendingReq(null);
+    notSurveyed(lat, lon, { noauto: true,
+      note: "No run ever started on GitHub. If the request never got submitted, here it is again." });
+    return;
+  }
   if(Date.now() - watcher.started > WATCH_LIMIT_MIN*60000){
     stopWatching(); setPendingReq(null);
     notSurveyed(lat, lon, { noauto: true,
@@ -1042,6 +1051,10 @@ async function pollRun(){
     const run = j && j.workflow_runs && j.workflow_runs[0];
     if(run && Date.parse(run.run_started_at) > watcher.started - 180000){
       watcher.run = run;
+      if(!watcher.confirmed){        // the request did get submitted after all
+        watcher.confirmed = true;
+        setPendingReq({ lat: watcher.lat, lon: watcher.lon, started: watcher.started });
+      }
     }
   }catch(e){}
   if(watcher) drawWatching();
@@ -1086,7 +1099,7 @@ function notSurveyed(lat, lon, opts){
   const pend = pendingReq();
   if(pend && !watcher && Math.abs(pend.lat - lat) < 1e-4 && Math.abs(pend.lon - lon) < 1e-4
      && Date.now() - pend.started < WATCH_LIMIT_MIN*60000){
-    watchBuild(lat, lon, pend.started, "Picking up the request you started earlier.");
+    watchBuild(lat, lon, pend.started, "Picking up the request you started earlier.", true);
     return;
   }
   if(ghToken() && !opts.noauto){ autoBuild(lat, lon); return; }
@@ -1137,7 +1150,8 @@ function notSurveyed(lat, lon, opts){
     setGhToken(v);
     try{
       await dispatchBuild(lat, lon, DEF_RADIUS, DEF_SPACING);
-      watchBuild(lat, lon, Date.now(), "Token saved. From now on this page builds new areas on its own.");
+      watchBuild(lat, lon, Date.now(),
+        "Token saved. From now on this page builds new areas on its own.", true);
     }catch(err){
       setGhToken("");
       $("toksave").disabled = false;
