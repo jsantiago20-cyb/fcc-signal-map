@@ -52,12 +52,16 @@ centre. The site loads whichever survey contains your coordinate.
 
 ## Building a survey
 
-**From the page itself** — nothing to install. Type a coordinate no survey
-covers, click **Build this survey**, and submit the request GitHub opens. That
-files an issue titled `Survey request: <lat>, <lon>`, which starts the workflow;
-the page keeps checking and opens the new area by itself a few minutes later.
-Save a fine-grained token in the page (Actions: read and write, this repository)
-and the button skips the issue and starts the run directly.
+**From the page itself.** Connect the page to GitHub once: paste a fine-grained
+token for this repository, with **Actions: read and write**, into the box the
+page shows for an unsurveyed coordinate. After that, typing any coordinate
+nobody has surveyed starts a run on its own — no clicks, no GitHub tab. The page
+polls `surveys.json` every 20 seconds and opens the new area when it lands. The
+token is held in that browser's `localStorage` and sent only to `api.github.com`.
+
+Without a token the page falls back to a prefilled issue titled
+`Survey request: <lat>, <lon>`, which you submit on GitHub while signed in.
+Same workflow, two more clicks.
 
 **On GitHub Actions** — for other radii and spacings. Open
 [Actions → Build a survey](../../actions/workflows/build-survey.yml), click *Run

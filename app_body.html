@@ -128,7 +128,7 @@
 
 <div class="notes">
   <h3>How this works</h3>
-  <p><b>Any US coordinate.</b> Type one in and the map opens on it. Coverage comes from surveys &mdash; a circle of sample points harvested in advance around a centre. If your coordinate sits inside a survey that already exists, it loads immediately. If it does not, one button asks GitHub Actions to harvest a new one, and the map opens by itself when the survey lands, about five minutes later.</p>
+  <p><b>Any US coordinate.</b> Type one in and the map opens on it. Coverage comes from surveys &mdash; a circle of sample points harvested in advance around a centre. If your coordinate sits inside a survey that already exists, it loads immediately. If it does not, the page asks GitHub Actions to harvest one and opens the map by itself when the survey lands, about five minutes later. That takes a GitHub token, saved once in this browser; without one the page hands you a prefilled request to submit on GitHub instead.</p>
   <p><b>Source.</b> Every coverage number comes from <code>/nbm/map/api/mobile/detail/{process_uuid}/{lat}/{lon}</code> &mdash; the same endpoint the FCC's own Location Summary sidebar calls. Terrain is USGS 3DEP hillshade; roads, trails and rivers are OpenStreetMap via Overpass; county lines and town centroids are Census TIGERweb.</p>
   <p><b>Why surveys have to be built ahead of time.</b> <code>broadbandmap.fcc.gov</code> sits behind Akamai Bot Manager and returns <code>403</code> to any request from another website, so this page physically cannot fetch coverage itself &mdash; no amount of client-side code gets around it. A survey is harvested by a real Chrome browser driven from a script, either on your own machine or on a GitHub Actions runner. USGS, Census and OpenStreetMap all allow direct browser access; the FCC is the only one that does not.</p>
   <p><b>What a filled hex means.</b> That a carrier <i>told the FCC</i> it expects service there &mdash; modeled propagation, not a measurement. The FCC's thresholds are the bar: 4G LTE at 5/1 Mbps, 5G-NR at either 7/1 or 35/3 Mbps, all outdoor and stationary. In-vehicle and in-building coverage are smaller.</p>
@@ -676,15 +676,17 @@ function jumpTo(lat, lon){
 
 /* ---------------- on-demand surveys ----------------
    The page cannot read the FCC's API itself, but it can ask the repository's
-   "Build a survey" workflow to do it. Two ways, both ending in the same run:
-   a prefilled issue (no setup, one click on GitHub), or a direct API dispatch
-   if a GitHub token has been saved in this browser. Either way the page then
-   watches surveys.json and opens the map the moment the pack lands.          */
+   "Build a survey" workflow to do it. With a token saved in this browser that
+   happens on its own: type a coordinate nobody has surveyed and the run starts,
+   no GitHub visit, no click. Without one the page falls back to a prefilled
+   issue, which needs you signed in to GitHub. Either way it then watches
+   surveys.json and opens the map the moment the pack lands.                   */
 
 const TOK_KEY  = "fcc-signal-map.token";
 const PEND_KEY = "fcc-signal-map.pending";
 const DEF_RADIUS = 50, DEF_SPACING = 2.5;
 const WATCH_LIMIT_MIN = 45;
+const TOKEN_PAGE = "https://github.com/settings/personal-access-tokens/new";
 
 function ghToken(){ try{ return localStorage.getItem(TOK_KEY) || ""; }catch(e){ return ""; } }
 function setGhToken(v){
@@ -721,11 +723,13 @@ async function dispatchBuild(lat, lon, radius, spacing){
         at: lat.toFixed(6)+", "+lon.toFixed(6),
         radius: String(radius), spacing: String(spacing) } })
     });
-  if(r.status !== 204){
-    let msg = "";
-    try{ msg = (await r.json()).message || ""; }catch(e){}
-    throw new Error("GitHub returned "+r.status+(msg ? ", "+msg : ""));
-  }
+  if(r.status === 204) return;
+  let msg = "";
+  try{ msg = (await r.json()).message || ""; }catch(e){}
+  if(r.status === 401) msg = "the token was rejected";
+  if(r.status === 403) msg = "the token cannot start workflow runs (it needs Actions: read and write)";
+  if(r.status === 404) msg = "the token cannot see this repository";
+  throw new Error(msg || ("GitHub returned "+r.status));
 }
 
 async function refreshManifest(){
@@ -739,6 +743,21 @@ function stopWatching(){
   if(!watcher) return;
   clearInterval(watcher.packTimer); clearInterval(watcher.runTimer);
   watcher = null;
+}
+
+/* The whole point: a coordinate with no survey starts one by itself. */
+async function autoBuild(lat, lon){
+  showState("state-empty");
+  $("state-empty").innerHTML =
+    '<h3><span class="spin"></span>Starting a survey for '+prettyCoord(lat, lon)+'</h3>'+
+    '<p>Asking GitHub Actions to harvest this area.</p>';
+  try{
+    await dispatchBuild(lat, lon, DEF_RADIUS, DEF_SPACING);
+    watchBuild(lat, lon, Date.now(), "");
+  }catch(err){
+    notSurveyed(lat, lon, { noauto: true,
+      note: "The saved token could not start the run: "+String(err.message || err)+"." });
+  }
 }
 
 function watchBuild(lat, lon, started, note){
@@ -755,9 +774,10 @@ async function checkForPack(){
   if(!watcher) return;
   const lat = watcher.lat, lon = watcher.lon;
   if(Date.now() - watcher.started > WATCH_LIMIT_MIN*60000){
-    const note = "Stopped checking after "+WATCH_LIMIT_MIN+" minutes. The run may still be going; "+
-                 "reload this page to pick it up again.";
-    stopWatching(); setPendingReq(null); notSurveyed(lat, lon, note);
+    stopWatching(); setPendingReq(null);
+    notSurveyed(lat, lon, { noauto: true,
+      note: "Stopped checking after "+WATCH_LIMIT_MIN+" minutes. The run may still be going; "+
+            "reload this page to pick it up again." });
     return;
   }
   try{
@@ -819,98 +839,86 @@ function drawWatching(){
   const stop = $("stopwatch");
   if(stop) stop.onclick = ()=>{
     const lat = watcher.lat, lon = watcher.lon;
-    stopWatching(); setPendingReq(null); notSurveyed(lat, lon);
+    stopWatching(); setPendingReq(null);
+    notSurveyed(lat, lon, { noauto: true });
   };
 }
 
-function notSurveyed(lat, lon, note){
+function notSurveyed(lat, lon, opts){
+  opts = opts || {};
   const pend = pendingReq();
   if(pend && !watcher && Math.abs(pend.lat - lat) < 1e-4 && Math.abs(pend.lon - lon) < 1e-4
      && Date.now() - pend.started < WATCH_LIMIT_MIN*60000){
     watchBuild(lat, lon, pend.started, "Picking up the request you started earlier.");
     return;
   }
+  if(ghToken() && !opts.noauto){ autoBuild(lat, lon); return; }
+
   showState("state-empty");
   const near = nearestSurvey(lat, lon);
   const pretty = prettyCoord(lat, lon);
   const wf = "https://github.com/"+REPO+"/actions/workflows/build-survey.yml";
   const fcc = "https://broadbandmap.fcc.gov/location-summary/mobile?version=dec2025&addr_full="+
     lat+"%2C+"+lon+"&lon="+lon+"&lat="+lat+"&zoom=12&vlon="+lon+"&vlat="+lat+"&env=0&tech=tech_all";
-  const tok = ghToken();
+  const has = !!ghToken();
   $("state-empty").innerHTML =
-    '<h3>No survey covers that point yet</h3>'+
-    (note ? '<p>'+note+'</p>' : '')+
-    '<p><span class="mono">'+pretty+'</span> is a valid US coordinate, but no coverage survey has been '+
-    'harvested around it.'+(near ? ' The nearest survey, <b>'+near.s.name+'</b>, is '+
-      near.d.toFixed(0)+' mi away.' : '')+'</p>'+
-    '<p>The FCC blocks web pages from reading its coverage API, so a survey has to be harvested by a '+
-    'real browser first. Build one now and this page will open it when it is ready, in about five '+
-    'minutes. It only has to happen once per area.</p>'+
+    '<h3>Nobody has surveyed that area yet</h3>'+
+    (opts.note ? '<p>'+opts.note+'</p>' : '')+
+    '<p><span class="mono">'+pretty+'</span> is a valid US coordinate, but the FCC blocks web pages '+
+    'from reading its coverage API, so the numbers have to be harvested by a real browser first. '+
+    'GitHub Actions does that in about five minutes, once per area.'+
+    (near ? ' The nearest survey, <b>'+near.s.name+'</b>, is '+near.d.toFixed(0)+' mi away.' : '')+'</p>'+
+    '<p><b>Connect this page to GitHub once</b> and it starts those runs by itself, without '+
+    'leaving this tab. Paste a fine-grained token for <span class="mono">'+REPO+'</span> with '+
+    '<b>Actions: read and write</b>; it is kept in this browser and sent only to github.com.</p>'+
     '<div class="row">'+
-      '<button class="btn" type="button" id="buildnow">Build this survey</button>'+
-      '<a class="btn alt" href="'+fcc+'" target="_blank" rel="noopener">See this point on the FCC map</a>'+
+      '<input type="text" id="tokbox" placeholder="github_pat_..." autocomplete="off" '+
+        'spellcheck="false" style="width:min(340px,68vw)">'+
+      '<button class="btn" type="button" id="toksave">Connect</button>'+
+      '<a class="btn alt" href="'+TOKEN_PAGE+'" target="_blank" rel="noopener">Create a token</a>'+
     '</div>'+
-    '<p class="hint" id="buildhow">'+
-      (tok ? 'The saved token starts the run straight from this page. '+
-             '<a href="#" id="tokedit">Forget it</a>.'
-           : 'The button opens a prefilled request on GitHub; sign in there and submit it. '+
-             '<a href="#" id="tokedit">Save a token</a> to skip that step.')+
-      ' Radius '+DEF_RADIUS+' mi, spacing '+DEF_SPACING+' mi. '+
-      '<a href="'+wf+'" target="_blank" rel="noopener">Other sizes</a> run from the Actions tab.'+
-    '</p>'+
-    '<div id="tokform" class="hidden">'+
-      '<div class="row">'+
-        '<input type="text" id="tokbox" placeholder="github_pat_..." autocomplete="off" '+
-          'spellcheck="false" style="width:min(380px,72vw)">'+
-        '<button class="btn" type="button" id="toksave">Save</button>'+
-      '</div>'+
-      '<p class="hint">A fine-grained personal access token for this repository, with the Actions '+
-      'permission set to read and write. It stays in this browser and is sent only to GitHub.</p>'+
-    '</div>'+
-    '<code>python nbm_site.py --at "'+lat.toFixed(6)+', '+lon.toFixed(6)+'"</code>';
+    '<p class="hint" id="tokmsg">'+
+      (has ? 'A token is saved. <a href="#" id="tokdrop">Forget it</a>.'
+           : 'On the token page: Repository access, only <span class="mono">fcc-signal-map</span>; '+
+             'Permissions, Actions set to read and write.')+'</p>'+
+    '<p class="hint">No token? <a href="#" id="viaissue">Request the survey on GitHub</a> instead, '+
+    'which needs you signed in there, or run '+
+    '<span class="mono">python nbm_site.py --at "'+lat.toFixed(6)+', '+lon.toFixed(6)+'"</span> '+
+    'yourself. <a href="'+wf+'" target="_blank" rel="noopener">Other radii</a> run from the Actions '+
+    'tab. <a href="'+fcc+'" target="_blank" rel="noopener">See this point on the FCC map</a>.</p>';
   $("rt").textContent = "Survey summary";
   $("readout").innerHTML = '<p class="hint">No survey loaded for that coordinate.</p>';
   $("stats").innerHTML = "";
   $("fulltable").innerHTML = "";
   markPills(null);
 
-  $("buildnow").onclick = async ()=>{
-    const btn = $("buildnow");
-    btn.disabled = true;
-    if(ghToken()){
-      btn.textContent = "Starting the run";
-      try{
-        await dispatchBuild(lat, lon, DEF_RADIUS, DEF_SPACING);
-        watchBuild(lat, lon, Date.now(), "");
-      }catch(err){
-        btn.disabled = false; btn.textContent = "Build this survey";
-        $("buildhow").innerHTML = 'That token did not work: '+String(err.message || err)+
-          ' <a href="#" id="tokedit">Try another</a>.';
-        wireTokenLink(lat, lon);
-      }
-      return;
+  $("toksave").onclick = async ()=>{
+    const v = $("tokbox").value.trim();
+    if(!v){ $("tokbox").focus(); return; }
+    $("toksave").disabled = true;
+    $("tokmsg").textContent = "Checking that token.";
+    setGhToken(v);
+    try{
+      await dispatchBuild(lat, lon, DEF_RADIUS, DEF_SPACING);
+      watchBuild(lat, lon, Date.now(), "Token saved. From now on this page builds new areas on its own.");
+    }catch(err){
+      setGhToken("");
+      $("toksave").disabled = false;
+      $("tokmsg").innerHTML = "That token did not work: "+String(err.message || err)+".";
     }
+  };
+  $("tokbox").addEventListener("keydown", e=>{ if(e.key === "Enter") $("toksave").onclick(); });
+
+  const drop = $("tokdrop");
+  if(drop) drop.onclick = (e)=>{
+    e.preventDefault(); setGhToken("");
+    notSurveyed(lat, lon, { noauto: true, note: "Token forgotten." });
+  };
+  $("viaissue").onclick = (e)=>{
+    e.preventDefault();
     window.open(issueURL(lat, lon, DEF_RADIUS, DEF_SPACING), "_blank", "noopener");
     watchBuild(lat, lon, Date.now(),
-      "Submit the request that just opened on GitHub, then leave this page to it.");
-  };
-  wireTokenLink(lat, lon);
-}
-
-function wireTokenLink(lat, lon){
-  const link = $("tokedit");
-  if(!link) return;
-  link.onclick = (e)=>{
-    e.preventDefault();
-    if(ghToken()){ setGhToken(""); notSurveyed(lat, lon, "Token forgotten."); return; }
-    $("tokform").classList.remove("hidden");
-    $("tokbox").focus();
-    $("toksave").onclick = ()=>{
-      const v = $("tokbox").value.trim();
-      if(!v) return;
-      setGhToken(v);
-      notSurveyed(lat, lon, "Token saved. The next build starts straight from this page.");
-    };
+      "Sign in to GitHub and submit the request that just opened, then leave this page to it.");
   };
 }
 
